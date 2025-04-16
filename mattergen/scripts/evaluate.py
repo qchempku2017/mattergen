@@ -30,6 +30,7 @@ def main(
     reference_dataset_path: str | None = None,
     device: str = str(get_device()),
     structures_output_path: str | None = None,
+    output_pre_aggregation: bool = False,
 ):
     structures = load_structures(Path(structures_path))
     energies = np.load(energies_path) if energies_path else None
@@ -52,6 +53,7 @@ def main(
         reference=reference,
         device=device,
         structures_output_path=structures_output_path,
+        output_pre_aggregation=output_pre_aggregation,
     )
     print(json.dumps(metrics, indent=2))
 

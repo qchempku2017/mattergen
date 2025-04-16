@@ -26,6 +26,7 @@ def evaluate(
     potential_load_path: str | None = None,
     device: str = str(get_device()),
     structures_output_path: str | None = None,
+    output_pre_aggregation: bool = False,
 ) -> dict[str, float | int]:
     """Evaluate the structures against a reference dataset.
 
@@ -39,6 +40,7 @@ def evaluate(
         potential_load_path: Path to the Machine Learning potential to use for relaxation.
         device: Device to use for relaxation.
         structures_output_path: Path to save the relaxed structures.
+        output_pre_aggregation: Whether to output the metrics before aggregation.
 
     Returns:
         metrics: a dictionary of metrics and their values.
@@ -62,4 +64,5 @@ def evaluate(
         metrics=evaluator.available_metrics,
         save_as=save_as,
         pretty_print=True,
+        output_pre_aggregation=output_pre_aggregation,
     )

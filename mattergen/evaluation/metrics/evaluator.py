@@ -252,6 +252,7 @@ class MetricsEvaluator:
         metrics: Sequence[Type[BaseMetric]] | Literal["all"],
         save_as: str | os.PathLike | None = None,
         pretty_print: bool = False,
+        output_pre_aggregation: bool = False,
     ) -> dict[str, float | int]:
         """Computes metrics and returns them as a dictionary. Optionally, saves the dictionary to a file.
 
@@ -259,6 +260,7 @@ class MetricsEvaluator:
             metrics: List of metrics to compute. If "all", all available metrics are computed.
             save_as: Path to save the dictionary. If None, the dictionary is not saved.
             pretty_print: If True, the dictionary is printed in a pretty format.
+            output_pre_aggregation: If True, the pre-aggregation values are included in the output.
         """
 
         metrics_dict: dict[str, dict] = {}
@@ -268,6 +270,8 @@ class MetricsEvaluator:
             metric = self._get_metric(metric_cls)
             logger.info(f"Computing metric {metric.name}")
             metrics_dict[metric.name] = {"value": metric.value, "description": metric.description}
+            if output_pre_aggregation and isinstance(metric, BaseAggregateMetric):
+                metrics_dict[metric.name].update({"pre-aggregation": metric.pre_aggregation_values.tolist()})
 
         if pretty_print:
             logger.info(
