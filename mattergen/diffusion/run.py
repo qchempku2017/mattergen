@@ -47,11 +47,12 @@ def maybe_instantiate(instance_or_config: T | Mapping, expected_type=None, **kwa
     return instance
 
 
-def _find_latest_checkpoint(dirpath: str) -> str | None:
+def find_latest_checkpoint(dirpath: str) -> str | None:
     """Finds the most recent checkpoint inside `dirpath`."""
 
     # checkpoint names are like "epoch=0-step=0.ckpt."
-    # Find the checkpoint with highest epoch:
+    # Find the checkpoint with the highest epoch:
+    # Will use the best ckpt up to now.
     def extract_epoch(ckpt):
         match = re.search(r"epoch=(\d+)", ckpt)
         if match:
@@ -136,7 +137,7 @@ def main(
         # Add an additional checkpointer with a fixed directory path to restore from.
         dirpath = os.path.join(trainer.default_root_dir, "checkpoints")
         trainer.callbacks.append(ModelCheckpoint(dirpath=dirpath))
-        ckpt_path = _find_latest_checkpoint(dirpath)
+        ckpt_path = find_latest_checkpoint(dirpath)
     pl_module: DiffusionLightningModule = maybe_instantiate(
         config.lightning_module, DiffusionLightningModule
     )
