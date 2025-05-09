@@ -118,7 +118,6 @@ def main(config: omegaconf.DictConfig):
     schema = OmegaConf.structured(Config)
     config = OmegaConf.merge(schema, config)
     OmegaConf.set_readonly(config, True)  # should not be written to
-    print(OmegaConf.to_yaml(config, resolve=True))
 
     mattergen_finetune(config)
 
@@ -136,6 +135,8 @@ def mattergen_finetune(config: omegaconf.DictConfig):
     # replace denoiser config with adapter config.
     with open_dict(config):
         config.lightning_module = lightning_module_config
+    # Move omegaconf print after the adapter config is injected to prevent errors.
+    print(OmegaConf.to_yaml(config, resolve=True))
 
     config_as_dict = OmegaConf.to_container(config, resolve=True)
     print(json.dumps(config_as_dict, indent=4))
