@@ -195,6 +195,11 @@ class CrystalGenerator:
 
     record_trajectories: bool = True  # store all intermediate samples by default
 
+    # Add support to compilation before inference. Default to turn off.
+    compile: bool = False
+    compile_backend: str = "inductor"
+    compile_mode: str = "default"
+
     # These attributes are set when prepare() method is called.
     _model: DiffusionLightningModule | None = None
     _cfg: DictConfig | None = None
@@ -333,6 +338,8 @@ class CrystalGenerator:
             return
         model = load_model_diffusion(self.checkpoint_info)
         model = model.to(get_device())
+        if self.compile:
+            torch.compile(self._model, backend=self.compile_backend, mode=self.compile_mode)
         self._model = model
         self._cfg = self.checkpoint_info.config
 

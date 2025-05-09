@@ -146,6 +146,9 @@ def main(
             {**OmegaConf.to_container(config, resolve=True)},
             allow_val_change=True,
         )
+    # Add support to compilation.
+    if config.compile:
+        torch.compile(pl_module, backend=config.compile_backend, mode=config.compile_mode)
     trainer.fit(
         pl_module,
         datamodule=datamodule,

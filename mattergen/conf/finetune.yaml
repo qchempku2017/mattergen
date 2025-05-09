@@ -2,6 +2,10 @@ hydra:
   run:
     dir: ${oc.env:OUTPUT_DIR,outputs/singlerun/${now:%Y-%m-%d}/${now:%H-%M-%S}}
 
+compile: False
+compile_backend: inductor
+compile_mode: default
+
 defaults:
   - data_module: mp_20
   - trainer: default

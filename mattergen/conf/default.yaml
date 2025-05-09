@@ -4,6 +4,10 @@ hydra:
 
 auto_resume: True
 
+compile: False
+compile_backend: inductor
+compile_mode: default
+
 defaults:
   - data_module: mp_20
   - trainer: default

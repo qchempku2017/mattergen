@@ -15,6 +15,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf, open_dict
 from pytorch_lightning.cli import SaveConfigCallback
 
+from mattergen.diffusion.config import Config
 from mattergen.common.utils.data_classes import MatterGenCheckpointInfo
 from mattergen.common.utils.globals import MODELS_PROJECT_ROOT, get_device
 from mattergen.diffusion.run import AddConfigCallback, SimpleParser, maybe_instantiate
@@ -110,9 +111,20 @@ def init_adapter_lightningmodule_from_pretrained(
 @hydra.main(
     config_path=str(MODELS_PROJECT_ROOT / "conf"), config_name="finetune", version_base="1.1"
 )
+def main(cfg: omegaconf.DictConfig):
+    torch.set_float32_matmul_precision("high")
+    # Make merged config options
+    # CLI options take priority over YAML file options
+    schema = OmegaConf.structured(Config)
+    config = OmegaConf.merge(schema, cfg)
+    OmegaConf.set_readonly(config, True)  # should not be written to
+    print(OmegaConf.to_yaml(cfg, resolve=True))
+
+    mattergen_finetune(cfg)
+
+
 def mattergen_finetune(cfg: omegaconf.DictConfig):
     # Tensor Core acceleration (leads to ~2x speed-up during training)
-    torch.set_float32_matmul_precision("high")
     trainer: pl.Trainer = maybe_instantiate(cfg.trainer, pl.Trainer)
     datamodule: pl.LightningDataModule = maybe_instantiate(cfg.data_module, pl.LightningDataModule)
 
@@ -138,6 +150,9 @@ def mattergen_finetune(cfg: omegaconf.DictConfig):
     # This callback will add a copy of the config to each checkpoint.
     trainer.callbacks.append(AddConfigCallback(config_as_dict))
 
+    # Add support to compilation.
+    if cfg.compile:
+        torch.compile(pl_module, backend=cfg.compile_backend, mode=cfg.compile_mode)
     trainer.fit(
         model=pl_module,
         datamodule=datamodule,
@@ -146,4 +161,4 @@ def mattergen_finetune(cfg: omegaconf.DictConfig):
 
 
 if __name__ == "__main__":
-    mattergen_finetune()
+    main()

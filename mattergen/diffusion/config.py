@@ -23,6 +23,11 @@ class Config:
     # directory for a checkpoint from which to resume training.
     auto_resume: bool = False
 
+    # Add support to torch compilation. Default behavior is not to compile.
+    compile: bool = False
+    compile_backend: str = "inductor"
+    compile_mode: str = "default"
+
     # DiffusionLightningModule
     lightning_module: dict[str, Any] = field(default_factory=dict)
 
