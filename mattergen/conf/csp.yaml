@@ -4,6 +4,9 @@ hydra:
 
 
 auto_resume: true
+compile: False
+compile_backend: inductor
+compile_mode: default
 
 defaults:
   - data_module: mp_20

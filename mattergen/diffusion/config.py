@@ -36,3 +36,6 @@ class Config:
 
     # LightningDataModule
     data_module: dict[str, Any] = field(default_factory=dict)
+
+    # AdapterModule (for contioning on properties, if available)
+    adapter: dict[str, Any] = field(default_factory=dict)
