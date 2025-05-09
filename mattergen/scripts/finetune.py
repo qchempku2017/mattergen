@@ -131,6 +131,8 @@ def mattergen_finetune(config: Config | DictConfig):
     with open_dict(config):
         config.lightning_module = lightning_module_config
 
+    print(OmegaConf.to_yaml(config, resolve=True))
+
     config_as_dict = OmegaConf.to_container(config, resolve=True)
     print(json.dumps(config_as_dict, indent=4))
     # This callback will save a config.yaml file.
@@ -177,7 +179,6 @@ def main(config: omegaconf.DictConfig):
     schema = OmegaConf.structured(Config)
     config = OmegaConf.merge(schema, config)
     OmegaConf.set_readonly(config, True)  # should not be written to
-    print(OmegaConf.to_yaml(config, resolve=True))
 
     mattergen_finetune(config)
 
