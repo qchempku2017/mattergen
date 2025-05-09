@@ -132,6 +132,7 @@ def mattergen_finetune(config: Config | DictConfig):
         config.lightning_module = lightning_module_config
 
     print(OmegaConf.to_yaml(config, resolve=True))
+    OmegaConf.set_readonly(config, True)  # should not be written to after injection.
 
     config_as_dict = OmegaConf.to_container(config, resolve=True)
     print(json.dumps(config_as_dict, indent=4))
@@ -178,7 +179,6 @@ def main(config: omegaconf.DictConfig):
     # CLI options take priority over YAML file options
     schema = OmegaConf.structured(Config)
     config = OmegaConf.merge(schema, config)
-    OmegaConf.set_readonly(config, True)  # should not be written to
 
     mattergen_finetune(config)
 
