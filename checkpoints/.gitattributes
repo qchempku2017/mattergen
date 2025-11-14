@@ -5,3 +5,4 @@ ml_bulk_modulus/checkpoints/last.ckpt filter=lfs diff=lfs merge=lfs -text
 space_group/checkpoints/last.ckpt filter=lfs diff=lfs merge=lfs -text
 chemical_system_energy_above_hull/checkpoints/last.ckpt filter=lfs diff=lfs merge=lfs -text
 dft_mag_density_hhi_score/checkpoints/last.ckpt filter=lfs diff=lfs merge=lfs -text
+mp_20_base/checkpoints/last.ckpt filter=lfs diff=lfs merge=lfs -text
