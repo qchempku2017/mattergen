@@ -41,7 +41,9 @@ class PredictorCorrector(Generic[Diffusable]):
         Args:
             diffusion_module: diffusion module
             predictor_partials: partials for constructing predictors. Keys are the names of the corruptions.
+                Predictors predict the score value.
             corrector_partials: partials for constructing correctors. Keys are the names of the corruptions.
+                Correctors apply some deviation to the score value, typically Langevin dynamics.
             device: device to run on
             n_steps_corrector: number of corrector steps
             N: number of noise levels
