@@ -116,3 +116,18 @@ class Corruption(abc.ABC):
           sampled x(t) (same shape as input x).
         """
         pass
+
+    @abc.abstractmethod
+    def sample_next_timestep(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        dt: torch.Tensor,
+        batch_idx: B = None,
+        batch: Optional[BatchedData] = None,
+    ) -> torch.Tensor:
+        """Sample marginal for x(t+dt) given x(t).
+        Returns:
+          sampled x(t+dt) (same shape as input x).
+        """
+        pass

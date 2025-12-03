@@ -97,6 +97,38 @@ class SDE(Corruption):
 
         return mean + std * z
 
+    def transition_prob(self, x, t, dt, batch_idx=None, batch=None):
+        """Gaussian transition q(x(t+dt) | x(t)) for SDE."""
+        drift, diffusion = self.sde(x, t, batch_idx, batch)
+        dt_expanded = maybe_expand(dt, batch_idx, x)
+        mean = x + drift * dt_expanded
+        std = diffusion * torch.sqrt(dt_expanded)
+        return mean, std
+
+    def sample_next_timestep(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        dt: torch.Tensor,
+        batch_idx: B = None,
+        batch: Optional[BatchedData] = None,
+    ) -> torch.Tensor:
+        """Sample next step for x(t+dt) given x(t).
+        
+        Args:
+          x: Current state x(t)
+          t: Current time t
+          dt: Delta time dt.
+          batch_idx: Batch indices
+          batch: Batched data
+          
+        Returns:
+          sampled x(t+dt)
+        """
+        mean, std = self.transition_prob(x, t, dt, batch_idx, batch)
+        z = torch.randn_like(x)
+        return mean + std * z
+
 
 class BaseVPSDE(SDE):
     """Base class for variance-preserving SDEs of the form
@@ -128,6 +160,7 @@ class BaseVPSDE(SDE):
         mean_coeff = self._marginal_mean_coeff(t)
         mean = maybe_expand(mean_coeff, batch_idx, x) * x
         std = maybe_expand(torch.sqrt(1.0 - mean_coeff**2), batch_idx, x)
+        # Read the paper of Song et al. for derivation. This is just a continuous version of DDPM.
         return mean, std
 
     def prior_sampling(
@@ -156,7 +189,7 @@ class BaseVPSDE(SDE):
         beta_t = self.beta(t)
         drift = -0.5 * maybe_expand(beta_t, batch_idx, x) * x
         diffusion = maybe_expand(torch.sqrt(beta_t), batch_idx, x)
-        return drift, diffusion
+        return drift, diffusion  # dx = drift * dt + diffusion * sqrt(dt) * standard Gaussian.
 
 
 class VPSDE(BaseVPSDE):

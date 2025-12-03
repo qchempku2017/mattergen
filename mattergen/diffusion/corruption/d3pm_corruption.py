@@ -106,3 +106,45 @@ class D3PMCorruption(Corruption):
         sample = torch.distributions.Categorical(logits=logits).sample()
         # samples are zero-based, so we need to add the offset to convert to non-zero-based class labels.
         return self._to_non_zero_based(sample)
+
+    # TODO: read D3PM paper and confirm whether this is correct.
+    def sample_next_timestep(
+            self,
+            x: torch.Tensor,
+            t: torch.Tensor,
+            dt: torch.Tensor,
+            batch_idx: B = None,
+            batch: Optional[BatchedData] = None,
+    ) -> torch.Tensor:
+        """
+        Sample next step class x(t+1) from q(x_{t+1} | x_t)
+
+        Args:
+            x: current token indices (non-zero based)
+            t: continuous time
+            dt: unused, only here for API consistency
+        Returns:
+            new x(t+1)
+        """
+        # discrete time index
+        t_disc = to_discrete_time(t, N=self.N, T=self.T)  # shape [batch]
+        t_disc = maybe_expand(t_disc, batch_idx, x).long()
+
+        x0 = self._to_zero_based(x.long())  # shape [num_nodes]
+
+        # must be matrix based diffusion to allow "get".
+        if not hasattr(self.d3pm, "get"):
+            raise NotImplementedError(
+                "D3PMCorruption requires a matrix-based scheduler with .get(t). "
+                "Other diffusions must implement q(x_{t+1}|x_t) explicitly."
+            )
+
+        # transition matrix q(x_{t+1}|x_t), shape [num_nodes, dim, dim]
+        Q = self.d3pm.get(t_disc)
+
+        # 对于每个 token，取其对应行分布
+        probs = Q[torch.arange(x0.shape[0]), x0]  # [num_nodes, dim]
+
+        sample = torch.distributions.Categorical(probs=probs).sample()
+
+        return self._to_non_zero_based(sample)

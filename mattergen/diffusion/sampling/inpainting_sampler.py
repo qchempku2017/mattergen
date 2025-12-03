@@ -40,7 +40,7 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
         super().__init__(**kwargs)
         self.n_resample_iters = n_resample_iters
 
-    def sample_with_inpainting(
+    def sample(
         self, 
         conditioning_data: BatchedData, 
         reference_data: BatchedData,
@@ -64,7 +64,7 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
             conditioning_data, reference_data, mask=mask, weight_mask=weight_mask, record=False
         )[:2]
 
-    def sample_with_inpainting_and_record(
+    def sample_with_record(
         self, 
         conditioning_data: BatchedData,
         reference_data: BatchedData,
@@ -215,7 +215,7 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
                         )
                         if record and resample_iter == self.n_resample_iters - 1:  # Only record on last iteration
                             recorded_samples.append(batch.clone().to("cpu"))
-                        batch, mean_batch = self._mask_replace_weighted(
+                        batch, mean_batch = _mask_replace_weighted(
                             samples_means=samples_means, 
                             batch=batch, 
                             mean_batch=mean_batch, 
@@ -236,148 +236,96 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
                     batch_idx=self._multi_corruption._get_batch_indices(batch),
                 )
                 
-                # For all but the last resample iteration, add noise to revert back to time t
-                if resample_iter < self.n_resample_iters - 1:
-                    # Add noise to revert the prediction back to time t for another denoising iteration
-                    batch = self._add_noise_to_revert_to_time_t(batch, reference_data, t, mask, weight_mask)
-                
                 if record and resample_iter == self.n_resample_iters - 1:  # Only record on last iteration
                     recorded_samples.append(batch.clone().to("cpu"))
-                batch, mean_batch = self._mask_replace_weighted(
+                batch, mean_batch = _mask_replace_weighted(
                     samples_means=samples_means, 
                     batch=batch, 
                     mean_batch=mean_batch, 
                     mask=mask,
                     weight_mask=weight_mask
                 )
+                # For all but the last resample iteration, add noise to revert one step back to time t
+                if resample_iter < self.n_resample_iters - 1:
+                    # Add noise to revert the prediction back to time t for another denoising iteration
+                    batch = self._multi_corruption.sample_next_timestep(batch, t-dt, dt)
 
         return batch, mean_batch, recorded_samples
 
-    # TODO: this is not correct! Only revert one step back, not sample from marginal at t!
-    # TODO: Also, implement this in each corruption subclass!
-    def _add_noise_to_revert_to_time_t(
-        self,
-        batch: Diffusable,
-        reference_data: Diffusable,
-        t: torch.Tensor,
-        mask: dict[str, torch.Tensor],
-        weight_mask: dict[str, torch.Tensor],
-    ) -> Diffusable:
-        """
-        Add noise to revert the denoised batch back to time t for resampling (RePaint technique).
-        
-        Args:
-            batch: The denoised batch at time t-1
-            reference_data: Reference data for known regions
-            t: Current timestep
-            mask: Binary mask for known/unknown regions
-            weight_mask: Weight mask for smooth transitions
-            
-        Returns:
-            Noised batch at time t
-        """
-        # Noise the reference data at current timestep
-        noised_reference = self._multi_corruption.sample_marginal(reference_data, t)
-        
-        # Add noise to the current batch to bring it back to time t
-        noised_batch = self._multi_corruption.sample_marginal(batch, t)
-        
-        # Combine noised reference data (for known parts) with noised current batch (for unknown parts)
-        combined_batch = reference_data.clone()
-        for k in self._multi_corruption.corrupted_fields:
-            if mask.get(k) is not None:
-                # Use weight-based interpolation if weight_mask is provided
-                if weight_mask.get(k) is not None:
-                    # Weighted combination based on distance to interface
-                    combined_batch[k] = (
-                        weight_mask[k] * noised_reference[k] + 
-                        (1 - weight_mask[k]) * noised_batch[k]
-                    )
-                else:
-                    # Standard binary mask combination
-                    combined_batch[k] = (
-                        mask[k] * noised_reference[k] + 
-                        (1 - mask[k]) * noised_batch[k]
-                    )
-            else:
-                combined_batch[k] = noised_batch[k]
-                
-        return combined_batch
 
-    def _mask_replace_weighted(
-        self,
-        samples_means: dict[str, Tuple[torch.Tensor, torch.Tensor]],
-        batch: BatchedData,
-        mean_batch: BatchedData,
-        mask: dict[str, torch.Tensor | None],
-        weight_mask: dict[str, torch.Tensor | None],
-    ) -> Tuple[BatchedData, BatchedData]:
-        """
-        Apply weighted masks for inpainting with smooth transitions.
-        
-        Args:
-            samples_means: Dictionary of (sample, mean) tuples for each field
-            batch: Current batch
-            mean_batch: Current mean batch
-            mask: Binary mask (1 for known/fixed regions, 0 for unknown regions)
-            weight_mask: Weight mask for smooth transitions (1 for known regions, decaying toward unknown regions)
-        """
-        from mattergen.diffusion.corruption.multi_corruption import apply
-        
-        # Apply weighted masks
-        samples_means = apply(
-            fns={k: self._mask_both_weighted for k in samples_means},
-            broadcast={},
-            sample_and_mean=samples_means,
-            mask=mask,
-            weight_mask=weight_mask,
-            old_x=batch,
-        )
+def _mask_replace_weighted(
+    samples_means: dict[str, Tuple[torch.Tensor, torch.Tensor]],
+    batch: BatchedData,
+    mean_batch: BatchedData,
+    mask: dict[str, torch.Tensor | None],
+    weight_mask: dict[str, torch.Tensor | None],
+) -> Tuple[BatchedData, BatchedData]:
+    """
+    Apply weighted masks for inpainting with smooth transitions.
 
-        # Put the updated values in `batch` and `mean_batch`
-        batch = batch.replace(**{k: v[0] for k, v in samples_means.items()})
-        mean_batch = mean_batch.replace(**{k: v[1] for k, v in samples_means.items()})
-        return batch, mean_batch
+    Args:
+        samples_means: Dictionary of (sample, mean) tuples for each field
+        batch: Current batch
+        mean_batch: Current mean batch
+        mask: Binary mask (1 for known/fixed regions, 0 for unknown regions)
+        weight_mask: Weight mask for smooth transitions (1 for known regions, decaying toward unknown regions)
+    """
+    from mattergen.diffusion.corruption.multi_corruption import apply
 
-    def _mask_both_weighted(
-        self, 
-        *, 
-        sample_and_mean: Tuple[torch.Tensor, torch.Tensor], 
-        old_x: torch.Tensor, 
-        mask: torch.Tensor,
-        weight_mask: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Apply weighted mask for smooth inpainting transitions.
-        
-        Args:
-            sample_and_mean: Tuple of (sample, mean) tensors
-            old_x: Original tensor values
-            mask: Binary mask (1 for known regions, 0 for unknown)
-            weight_mask: Weight mask (1 for known regions, decaying toward unknown regions)
-        """
-        return tuple(self._mask_weighted(old_x=old_x, new_x=x, mask=mask, weight_mask=weight_mask) 
-                     for x in sample_and_mean)  # type: ignore
+    # Apply weighted masks
+    samples_means = apply(
+        fns={k: _mask_both_weighted for k in samples_means},
+        broadcast={},
+        sample_and_mean=samples_means,
+        mask=mask,
+        weight_mask=weight_mask,
+        old_x=batch,
+    )
 
-    def _mask_weighted(
-        self, 
-        *, 
-        old_x: torch.Tensor, 
-        new_x: torch.Tensor, 
-        mask: torch.Tensor | None,
-        weight_mask: torch.Tensor | None
-    ) -> torch.Tensor:
-        """
-        Replace new_x with old_x using weighted interpolation for smooth transitions.
-        
-        Args:
-            old_x: Original tensor values
-            new_x: New tensor values
-            mask: Binary mask (1 for known regions, 0 for unknown)
-            weight_mask: Weight mask (1 for known regions, decaying toward unknown regions)
-        """
-        if mask is None or weight_mask is None:
-            return new_x
-        else:
-            # Use the weight mask for smooth transitions instead of binary mask
-            return new_x.lerp(old_x, weight_mask)
+    # Put the updated values in `batch` and `mean_batch`
+    batch = batch.replace(**{k: v[0] for k, v in samples_means.items()})
+    mean_batch = mean_batch.replace(**{k: v[1] for k, v in samples_means.items()})
+    return batch, mean_batch
+
+
+def _mask_both_weighted(
+    *,
+    sample_and_mean: Tuple[torch.Tensor, torch.Tensor],
+    old_x: torch.Tensor,
+    mask: torch.Tensor,
+    weight_mask: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply weighted mask for smooth inpainting transitions.
+
+    Args:
+        sample_and_mean: Tuple of (sample, mean) tensors
+        old_x: Original tensor values
+        mask: Binary mask (1 for known regions, 0 for unknown)
+        weight_mask: Weight mask (1 for known regions, decaying toward unknown regions)
+    """
+    return tuple(_mask_weighted(old_x=old_x, new_x=x, mask=mask, weight_mask=weight_mask)
+                 for x in sample_and_mean)  # type: ignore
+
+
+def _mask_weighted(
+    *,
+    old_x: torch.Tensor,
+    new_x: torch.Tensor,
+    mask: torch.Tensor | None,
+    weight_mask: torch.Tensor | None
+) -> torch.Tensor:
+    """
+    Replace new_x with old_x using weighted interpolation for smooth transitions.
+
+    Args:
+        old_x: Original tensor values
+        new_x: New tensor values
+        mask: Binary mask (1 for known regions, 0 for unknown)
+        weight_mask: Weight mask (1 for known regions, decaying toward unknown regions)
+    """
+    if mask is None or weight_mask is None:
+        return new_x
+    else:
+        # Use the weight mask for smooth transitions instead of binary mask
+        return new_x.lerp(old_x, weight_mask)

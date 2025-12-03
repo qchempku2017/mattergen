@@ -118,6 +118,19 @@ class MultiCorruption(Generic[Diffusable]):
         noisy_batch = batch.replace(**noisy_data)
         return noisy_batch
 
+    def sample_next_timestep(self, batch: Diffusable, t, dt) -> Diffusable:
+        def fn_getter(corruption: Corruption) -> Callable[..., Tuple[torch.Tensor, torch.Tensor]]:
+            return corruption.sample_next_timestep
+
+        noisy_data = self._apply_corruption_fn(
+            fn_getter,
+            x=batch,
+            batch_idx=self._get_batch_indices(batch),
+            broadcast=dict(t=t, dt=dt),
+        )
+        noisy_batch = batch.replace(**noisy_data)
+        return noisy_batch
+
     def sde(
         self, batch: Diffusable, t: torch.Tensor
     ) -> Dict[str, Tuple[torch.Tensor, torch.Tensor]]:
