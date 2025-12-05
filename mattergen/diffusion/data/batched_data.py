@@ -119,6 +119,8 @@ class SimpleBatchedData(BatchedData):
         if batch_size == 0:
             return []
 
+        # batch_idx represents the index of structure that each atom belongs to.
+        # In mattergen, batch is established at the atom level, not the structure level, if batch_idx is not None.
         def _unpack(k, i):
             if self.batch_idx[k] is not None:
                 return self.data[k][self.batch_idx[k] == i]

@@ -124,8 +124,9 @@ class D3PMCorruption(Corruption):
             x: current token indices (non-zero based)
             t: continuous time
             dt: unused, only here for API consistency
-            batch_idx: index of atoms in a structure.
-             In mattergen, every batch comprise a certain amount of atoms rather than structure.
+            batch_idx: index of atoms in a structure, if not None.
+              In mattergen, when batch_idx is not None, every batch comprise a certain amount of atoms
+              rather than structure. (Check SimpleBatchedData.to_data_list()) When batch_idx is not None, then
             batch: unused, only here for API consistency
         Returns:
             new x(t+1)
