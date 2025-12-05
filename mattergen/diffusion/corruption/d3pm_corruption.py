@@ -107,7 +107,8 @@ class D3PMCorruption(Corruption):
         # samples are zero-based, so we need to add the offset to convert to non-zero-based class labels.
         return self._to_non_zero_based(sample)
 
-    # TODO: read D3PM paper and confirm whether this is correct.
+    # TODO: Need manual validation to see if this works correctly.
+    # TODO: pay attention to the usage of batch_idx and x.
     def sample_next_timestep(
             self,
             x: torch.Tensor,
@@ -123,14 +124,18 @@ class D3PMCorruption(Corruption):
             x: current token indices (non-zero based)
             t: continuous time
             dt: unused, only here for API consistency
+            batch_idx: index of atoms in a structure.
+             In mattergen, every batch comprise a certain amount of atoms rather than structure.
+            batch: unused, only here for API consistency
         Returns:
             new x(t+1)
         """
         # discrete time index
-        t_disc = to_discrete_time(t, N=self.N, T=self.T)  # shape [batch]
-        t_disc = maybe_expand(t_disc, batch_idx, x).long()
+        t_disc = to_discrete_time(t, N=self.N, T=self.T)
+        # t + 1, same reason as in marginal_probs.
+        t_disc = maybe_expand(t_disc, batch_idx).long() + 1 # shape [batch]
 
-        x0 = self._to_zero_based(x.long())  # shape [num_nodes]
+        x0 = self._to_zero_based(x.long())  # shape [batch, num_nodes]?
 
         # must be matrix based diffusion to allow "get".
         if not hasattr(self.d3pm, "get"):
@@ -139,11 +144,20 @@ class D3PMCorruption(Corruption):
                 "Other diffusions must implement q(x_{t+1}|x_t) explicitly."
             )
 
-        # transition matrix q(x_{t+1}|x_t), shape [num_nodes, dim, dim]
+        # transition matrix q(x_{t+1}|x_t), shape [batch, dim, dim]
         Q = self.d3pm.get(t_disc)
+        # Q to [batch, num_nodes, to_classes, from_classes]
+        Q = Q[:, None, :, :].expand(-1, x0.shape[1], -1, -1)
 
-        # 对于每个 token，取其对应行分布
-        probs = Q[torch.arange(x0.shape[0]), x0]  # [num_nodes, dim]
+
+        # Q is [batch, num_nodes, to_classes, from_classes]
+        # prob is [batch, num_nodes, to_classes]
+        # dim=3 gather gets output[i][j][k][l] = input[i][j][k][index[i][j][k][l]],
+        # output shape will be the same as the index.
+        probs = Q.gather(
+            dim=3,
+            index=x0.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, Q.size(2), 1)  # [B, N, to_classes, 1]
+        ).squeeze(-1)
 
         sample = torch.distributions.Categorical(probs=probs).sample()
 
