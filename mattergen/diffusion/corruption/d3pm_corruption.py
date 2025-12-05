@@ -58,7 +58,7 @@ class D3PMCorruption(Corruption):
         t_discrete = maybe_expand(to_discrete_time(t, N=self.N, T=self.T), batch_idx) + 1
         _, logits = d3pm.q_sample(
             self._to_zero_based(x.long()), t_discrete, diffusion=self.d3pm, return_logits=True
-        )
+        )  # logits shaped: [num_atoms_in_batch, dim], 2-dimensional. See d3pm.q_sample.
         return logits, None  # mean: (nodes_per_sample * batch_size, ), std None
 
     def prior_sampling(
@@ -107,8 +107,6 @@ class D3PMCorruption(Corruption):
         # samples are zero-based, so we need to add the offset to convert to non-zero-based class labels.
         return self._to_non_zero_based(sample)
 
-    # TODO: Need manual validation to see if this works correctly.
-    # TODO: pay attention to the usage of batch_idx and x.
     def sample_next_timestep(
             self,
             x: torch.Tensor,
@@ -134,9 +132,12 @@ class D3PMCorruption(Corruption):
         # discrete time index
         t_disc = to_discrete_time(t, N=self.N, T=self.T)
         # t + 1, same reason as in marginal_probs.
-        t_disc = maybe_expand(t_disc, batch_idx).long() + 1 # shape [batch]
+        t_disc = maybe_expand(t_disc, batch_idx).long() + 1 # shape [num_atoms_in_batch].
+        # Remember, mattergen uses atom-level flattening in batch representation!
 
-        x0 = self._to_zero_based(x.long())  # shape [batch, num_nodes]?
+        # shape [num_atoms_in_batch], representing element number of each atom flatten in batch.
+        # See marginal_prob, and trace back to q_sample for evidence.
+        x0 = self._to_zero_based(x.long())
 
         # must be matrix based diffusion to allow "get".
         if not hasattr(self.d3pm, "get"):
@@ -145,20 +146,11 @@ class D3PMCorruption(Corruption):
                 "Other diffusions must implement q(x_{t+1}|x_t) explicitly."
             )
 
-        # transition matrix q(x_{t+1}|x_t), shape [batch, dim, dim]
+        # transition matrix q(x_{t+1}|x_t), shape [num_atoms_in_batch, dim(to_class), dim(from_class)]
         Q = self.d3pm.get(t_disc)
-        # Q to [batch, num_nodes, to_classes, from_classes]
-        Q = Q[:, None, :, :].expand(-1, x0.shape[1], -1, -1)
 
-
-        # Q is [batch, num_nodes, to_classes, from_classes]
-        # prob is [batch, num_nodes, to_classes]
-        # dim=3 gather gets output[i][j][k][l] = input[i][j][k][index[i][j][k][l]],
-        # output shape will be the same as the index.
-        probs = Q.gather(
-            dim=3,
-            index=x0.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, Q.size(2), 1)  # [B, N, to_classes, 1]
-        ).squeeze(-1)
+        # Query Q with x0 in the last dimension (from_class). Get probabilities in shape [num_atoms_in_batch, dim].
+        probs = Q[torch.arange(x0.shape[0], device=x.device), :, x0]
 
         sample = torch.distributions.Categorical(probs=probs).sample()
 

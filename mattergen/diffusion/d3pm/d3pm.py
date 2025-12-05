@@ -403,7 +403,7 @@ class MaskDiffusion(DiscreteDiffusionMatrixBase):
         self.use_fast_inference = use_fast_inference
         self.precision = precision
         self.dim = dim  # allow mask
-        self.state = self._create_state()
+        self.state = self._create_state()  # [num_timesteps + 1].
 
     def _create_state(self):
         """Initializes values used by the get function."""
@@ -455,6 +455,12 @@ class MaskDiffusion(DiscreteDiffusionMatrixBase):
         ret = (1 - beta)[:, None, None] * torch.eye(dim, device=_t.device)[None] + beta[
             :, None, None
         ] * self._get_mask().to(_t.device)[None]
+        # Get 2D tensor of shape [dim(to_classes), dim(from_classes)].
+        # For example:
+        # 0.7, 0.0, 0.0
+        # 0.0, 0.7, 0.0
+        # 0.0, 0.3, 1.0.
+        # Sum over to_classes should be 1.
         return ret if len(t.shape) == 1 else ret.squeeze(0)
 
     def qt_reverse(self, qt_plus_1, t, return_logits=False, make_one_hot=False, epsilon=1e-20):
@@ -504,6 +510,7 @@ class MaskDiffusion(DiscreteDiffusionMatrixBase):
 
         Args:
           q0: an array of floats specifying a distribution over p(x_0).
+           one-dimensional if your make_one_hot=True, otherwise 2-dimensional.
           t: t in q(x_t | x_0).
           return_logits: if True, return the output logits
           make_one_hot: if True, will convert q0 to floats if needed.
@@ -517,25 +524,27 @@ class MaskDiffusion(DiscreteDiffusionMatrixBase):
                 q0, t, return_logits=return_logits, make_one_hot=make_one_hot, epsilon=epsilon
             )
 
-        if make_one_hot:
+        if make_one_hot:  # q0 always becomes 2D [num_atoms_in_batch, dim], or it already is.
             assert q0.dtype in [torch.int32, torch.long]
             q0 = torch.eye(self.dim, device=q0.device)[q0]
 
         assert q0.dtype == torch.float32
-        assert len(q0.shape) == 2
+        assert len(q0.shape) == 2  # Confirms that q0 is 2D.
 
         # p is probability of staying the same. (1 - p) is prob of masking.
-        p = self.state.to(q0.device)[t]
+        # t: [num_atoms_in_batch], as already expanded to [num_atoms_in_batch], tracing back to pc_sampler.
+        p = self.state.to(q0.device)[t] # [num_atoms_in_batch]
 
-        non_mask_prob = p[:, None] * q0[:, :-1]
-        mask_prob = 1 - non_mask_prob.sum(-1)
+        # Evidence that q0 must be one dimensional at input if your make_one_hot=True.
+        non_mask_prob = p[:, None] * q0[:, :-1]  # [num_atoms_in_batch, dim - 1]
+        mask_prob = 1 - non_mask_prob.sum(-1)   # [num_atoms_in_batch]
 
         prob_at_time_t = (
             mask_prob[:, None] * torch.eye(self.dim, device=q0.device)[self.dim - 1][None]
         )
-        prob_at_time_t[:, :-1] = non_mask_prob
+        prob_at_time_t[:, :-1] = non_mask_prob # [num_atoms_in_batch, dim]
 
-        prob_at_time_t = torch.where(t[:, None] == 0, q0, prob_at_time_t)
+        prob_at_time_t = torch.where(t[:, None] == 0, q0, prob_at_time_t) # [num_atoms_in_batch, dim]
 
         if return_logits:
             return torch.log(prob_at_time_t + epsilon)
@@ -694,13 +703,17 @@ def q_sample(x_start, t, diffusion, return_logits=False):
     assert x_start.dtype in [torch.int32, torch.long]
 
     dim = diffusion.dim
+    # Since get_qt_given_q0 is using make_one_hot=False, here we pre-convert x_start from 1d to 2d,
+    # shaped [num_atoms_in_batch, dim]
+    # From here, we also see that x_start must be tensor of integer indices.
     x_start = torch.eye(dim, device=x_start.device)[x_start]
 
-    logits = diffusion.get_qt_given_q0(q0=x_start, t=t, return_logits=True)
+    logits = diffusion.get_qt_given_q0(q0=x_start, t=t, return_logits=True)  # As [num_atoms_in_batch, dim].
+    # See get_qt_given_q0 in MaskDiffusion.
     sample = Categorical(logits=logits).sample()
     if return_logits:
         return sample, logits
-    return sample
+    return sample  # [num_atoms_in_batch], 1-dimensional.
 
 
 def compute_prior_kl(x_start, diffusion, target_mask=None):
