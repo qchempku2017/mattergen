@@ -328,4 +328,6 @@ def _mask_weighted(
         return new_x
     else:
         # Use the weight mask for smooth transitions instead of binary mask
+        if weight_mask is None:
+            weight_mask = mask.float()
         return new_x.lerp(old_x, weight_mask)
