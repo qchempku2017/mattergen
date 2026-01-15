@@ -8,7 +8,7 @@ import torch
 from mattergen.diffusion.data.batched_data import BatchedData
 from mattergen.diffusion.sampling.pc_sampler import (
     PredictorCorrector, SampleAndMean, SampleAndMeanAndRecords,
-    _sample_prior,
+    _sample_prior, _mask_replace
 )
 from mattergen.diffusion.corruption.multi_corruption import apply
 
@@ -45,7 +45,6 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
         conditioning_data: BatchedData, 
         reference_data: BatchedData,
         mask: Mapping[str, torch.Tensor] | None = None,
-        weight_mask: Mapping[str, torch.Tensor] | None = None
     ) -> SampleAndMean:
         """
         Create samples using inpainting technique based on RePaint paper.
@@ -53,15 +52,14 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
         Args:
             conditioning_data: Batched conditioning data
             reference_data: Reference data for known regions
-            mask: Binary mask where 1 indicates known (fixed) regions and 0 indicates unknown regions
-            weight_mask: Non-binary weight mask according to distance to interface/surface,
-                        decaying as atomic position moves further away from the interface
+            mask: Float mask between 0 and 1,
+                where 1 indicates known (fixed) regions and 0 indicates unknown regions.
                         
         Returns:
            (batch, mean_batch). The difference between these is that `mean_batch` has no noise added at the final denoising step.
         """
         return self._sample_maybe_record_with_inpainting(
-            conditioning_data, reference_data, mask=mask, weight_mask=weight_mask, record=False
+            conditioning_data, reference_data, mask=mask, record=False
         )[:2]
 
     def sample_with_record(
@@ -69,7 +67,6 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
         conditioning_data: BatchedData,
         reference_data: BatchedData,
         mask: Mapping[str, torch.Tensor] | None = None,
-        weight_mask: Mapping[str, torch.Tensor] | None = None
     ) -> SampleAndMeanAndRecords:
         """
         Create samples using inpainting technique based on RePaint paper and record intermediate steps.
@@ -77,15 +74,14 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
         Args:
             conditioning_data: Batched conditioning data
             reference_data: Reference data for known regions
-            mask: Binary mask where 1 indicates known (fixed) regions and 0 indicates unknown regions
-            weight_mask: Non-binary weight mask according to distance to interface/surface,
-                        decaying as atomic position moves further away from the interface
+            mask: Float mask between 0 and 1,
+                where 1 indicates known (fixed) regions and 0 indicates unknown regions.
                         
         Returns:
            (batch, mean_batch, recorded_samples).
         """
         return self._sample_maybe_record_with_inpainting(
-            conditioning_data, reference_data, mask=mask, weight_mask=weight_mask, record=True
+            conditioning_data, reference_data, mask=mask, record=True
         )
 
     def _sample_maybe_record_with_inpainting(
@@ -93,7 +89,6 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
         conditioning_data: BatchedData,
         reference_data: BatchedData,
         mask: Mapping[str, torch.Tensor] | None = None,
-        weight_mask: Mapping[str, torch.Tensor] | None = None,
         record: bool = False,
     ) -> SampleAndMeanAndRecords:
         """
@@ -102,9 +97,8 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
         Args:
             conditioning_data: Batched conditioning data
             reference_data: Reference data for known regions
-            mask: Binary mask where 1 indicates known (fixed) regions and 0 indicates unknown regions
-            weight_mask: Non-binary weight mask according to distance to interface/surface,
-                        decaying as atomic position moves further away from the interface
+            mask: Float mask between 0 and 1,
+                where 1 indicates known (fixed) regions and 0 indicates unknown regions.
             record: Whether to record intermediate samples
                         
         Returns:
@@ -113,18 +107,15 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
         if isinstance(self._diffusion_module, torch.nn.Module):
             self._diffusion_module.eval()
         mask = mask or {}
-        weight_mask = weight_mask or {}
         conditioning_data = conditioning_data.to(self._device)
         reference_data = reference_data.to(self._device)
         mask = {k: v.to(self._device) for k, v in mask.items()}
-        weight_mask = {k: v.to(self._device) for k, v in weight_mask.items()}
         # Use regular prior sampling. No special inpainting initialization needed.
         batch = _sample_prior(self._multi_corruption, conditioning_data, mask=mask)
         return self._denoise_with_inpainting(
             batch=batch, 
             mask=mask, 
             reference_data=reference_data,
-            weight_mask=weight_mask,
             record=record
         )
 
@@ -133,7 +124,6 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
         batch: Diffusable,
         mask: dict[str, torch.Tensor],
         reference_data: Diffusable,
-        weight_mask: dict[str, torch.Tensor] | None = None,
         record: bool = False,
     ) -> SampleAndMeanAndRecords:
         """
@@ -145,10 +135,9 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
         
         Args:
             batch: The initial noisy batch
-            mask: Binary mask where 1 indicates known (fixed) regions and 0 indicates unknown regions
+            mask: Float mask between 0 and 1,
+                where 1 indicates known (fixed) regions and 0 indicates unknown regions.
             reference_data: The original reference data for known regions
-            weight_mask: Non-binary weight mask according to distance to interface/surface,
-                        decaying as atomic position moves further away from the interface
             record: Whether to record intermediate samples
         """
         recorded_samples = None
@@ -160,9 +149,8 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
             mask.setdefault(k, None)
         mean_batch = batch.clone()
         
-        # Initialize weight mask if not provided
-        if weight_mask is None:
-            weight_mask = {k: msk.float() if msk is not None else None for k, msk in mask.items()}
+        # Initialize mask weights.
+        mask = {k: msk.float() if msk is not None else None for k, msk in mask.items()}
 
         # Decreasing timesteps from T to eps_t
         timesteps = torch.linspace(self._max_t, self._eps_t, self.N, device=self._device)
@@ -179,22 +167,15 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
                 noised_reference = self._multi_corruption.sample_marginal(reference_data, t)
                 
                 # Combine noised reference data (for known parts) with current batch (for unknown parts)
-                combined_batch = reference_data.clone()
+                combined_batch = batch.clone()
                 for k in self._multi_corruption.corrupted_fields:
                     if mask.get(k) is not None:
-                        # Use weight-based interpolation if weight_mask is provided
-                        if weight_mask.get(k) is not None:
-                            # Weighted combination based on distance to interface
-                            combined_batch[k] = (
-                                weight_mask[k] * noised_reference[k] + 
-                                (1 - weight_mask[k]) * batch[k]
-                            )
-                        else:
-                            # Standard binary mask combination
-                            combined_batch[k] = (
-                                mask[k] * noised_reference[k] + 
-                                (1 - mask[k]) * batch[k]
-                            )
+                        # Use weight-based interpolation
+                        # Weighted combination based on distance to interface
+                        combined_batch[k] = (
+                            mask[k] * noised_reference[k] +
+                            (1 - mask[k]) * batch[k]
+                        )
                 batch = combined_batch
 
             # RePaint resampling iterations
@@ -215,12 +196,11 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
                         )
                         if record and resample_iter == self.n_resample_iters - 1:  # Only record on last iteration
                             recorded_samples.append(batch.clone().to("cpu"))
-                        batch, mean_batch = _mask_replace_weighted(
+                        batch, mean_batch = _mask_replace(
                             samples_means=samples_means, 
                             batch=batch, 
                             mean_batch=mean_batch, 
                             mask=mask,
-                            weight_mask=weight_mask
                         )
 
                 # Predictor updates
@@ -238,12 +218,11 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
                 
                 if record and resample_iter == self.n_resample_iters - 1:  # Only record on last iteration
                     recorded_samples.append(batch.clone().to("cpu"))
-                batch, mean_batch = _mask_replace_weighted(
+                batch, mean_batch = _mask_replace(
                     samples_means=samples_means, 
                     batch=batch, 
                     mean_batch=mean_batch, 
                     mask=mask,
-                    weight_mask=weight_mask
                 )
                 # For all but the last resample iteration, add noise to revert one step back to time t
                 if resample_iter < self.n_resample_iters - 1:
@@ -251,83 +230,3 @@ class InpaintingPredictorCorrector(PredictorCorrector[Diffusable], Generic[Diffu
                     batch = self._multi_corruption.sample_next_timestep(batch, t-dt, dt)
 
         return batch, mean_batch, recorded_samples
-
-
-def _mask_replace_weighted(
-    samples_means: dict[str, Tuple[torch.Tensor, torch.Tensor]],
-    batch: BatchedData,
-    mean_batch: BatchedData,
-    mask: dict[str, torch.Tensor | None],
-    weight_mask: dict[str, torch.Tensor | None],
-) -> Tuple[BatchedData, BatchedData]:
-    """
-    Apply weighted masks for inpainting with smooth transitions.
-
-    Args:
-        samples_means: Dictionary of (sample, mean) tuples for each field
-        batch: Current batch
-        mean_batch: Current mean batch
-        mask: Binary mask (1 for known/fixed regions, 0 for unknown regions)
-        weight_mask: Weight mask for smooth transitions (1 for known regions, decaying toward unknown regions)
-    """
-    from mattergen.diffusion.corruption.multi_corruption import apply
-
-    # Apply weighted masks
-    samples_means = apply(
-        fns={k: _mask_both_weighted for k in samples_means},
-        broadcast={},
-        sample_and_mean=samples_means,
-        mask=mask,
-        weight_mask=weight_mask,
-        old_x=batch,
-    )
-
-    # Put the updated values in `batch` and `mean_batch`
-    batch = batch.replace(**{k: v[0] for k, v in samples_means.items()})
-    mean_batch = mean_batch.replace(**{k: v[1] for k, v in samples_means.items()})
-    return batch, mean_batch
-
-
-def _mask_both_weighted(
-    *,
-    sample_and_mean: Tuple[torch.Tensor, torch.Tensor],
-    old_x: torch.Tensor,
-    mask: torch.Tensor,
-    weight_mask: torch.Tensor
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply weighted mask for smooth inpainting transitions.
-
-    Args:
-        sample_and_mean: Tuple of (sample, mean) tensors
-        old_x: Original tensor values
-        mask: Binary mask (1 for known regions, 0 for unknown)
-        weight_mask: Weight mask (1 for known regions, decaying toward unknown regions)
-    """
-    return tuple(_mask_weighted(old_x=old_x, new_x=x, mask=mask, weight_mask=weight_mask)
-                 for x in sample_and_mean)  # type: ignore
-
-
-def _mask_weighted(
-    *,
-    old_x: torch.Tensor,
-    new_x: torch.Tensor,
-    mask: torch.Tensor | None,
-    weight_mask: torch.Tensor | None
-) -> torch.Tensor:
-    """
-    Replace new_x with old_x using weighted interpolation for smooth transitions.
-
-    Args:
-        old_x: Original tensor values
-        new_x: New tensor values
-        mask: Binary mask (1 for known regions, 0 for unknown)
-        weight_mask: Weight mask (1 for known regions, decaying toward unknown regions)
-    """
-    if mask is None or weight_mask is None:
-        return new_x
-    else:
-        # Use the weight mask for smooth transitions instead of binary mask
-        if weight_mask is None:
-            weight_mask = mask.float()
-        return new_x.lerp(old_x, weight_mask)
